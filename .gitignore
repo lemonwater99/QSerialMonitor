@@ -1,0 +1,12 @@
+.vs/
+bin/
+obj/
+*.user
+*.suo
+*.db
+*.ipch
+*.opendb
+*.VC.db
+*.VC.VC.opendb
+*.sln.docstates
+x64/
