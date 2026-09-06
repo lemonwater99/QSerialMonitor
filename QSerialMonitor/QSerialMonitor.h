@@ -3,6 +3,8 @@
 #include <QtWidgets/QMainWindow>
 #include "ui_QSerialMonitor.h"
 #include <QSerialPort>
+#include <QThread>
+#include "SerialWorker.h"
 
 class QComboBox;
 class QPushButton;
@@ -21,7 +23,9 @@ public:
 
 private:
     void buildUi();
+    void setupWorker();
     void appendLog(const QString& message);
+    bool parseValue(const QString& line, double* value) const;
 
 signals:
     void requestClosePort();
@@ -30,10 +34,17 @@ signals:
         QSerialPort::DataBits dataBits,
         QSerialPort::Parity parity,
         QSerialPort::StopBits stopBits);
+    void requestWriteText(const QString& text);
 
 private slots:
     void refreshPorts();
     void openOrClosePort();
+    void sendCommand();
+    void onPortOpened();
+    void onPortClosed();
+    void onRawReceived(const QByteArray& data);
+    void onLineReceived(const QString& line);
+    void onErrorOccurred(const QString& message);
 
 private:
     QComboBox* m_portBox = nullptr;
@@ -54,9 +65,12 @@ private:
     ChartWidget* m_chart = nullptr;
     QTextEdit* m_logEdit = nullptr;
 
-    bool m_isOpened = false;
+    QThread m_workerThread;
+    SerialWorker* m_worker = nullptr;
+    bool m_opened = false;
+    int m_lineCount = 0;
 
-    Ui::QSerialMonitorClass ui;
+   // Ui::QSerialMonitorClass ui;
 };
 
 class ChartWidget : public QWidget

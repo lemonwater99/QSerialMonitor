@@ -21,10 +21,16 @@ QSerialMonitor::QSerialMonitor(QWidget *parent)
 {
     //ui.setupUi(this);
     buildUi();
+    setupWorker();
+    refreshPorts();
 }
 
 QSerialMonitor::~QSerialMonitor()
-{}
+{
+    emit requestClosePort();
+    m_workerThread.quit();
+    m_workerThread.wait();
+}
 
 void QSerialMonitor::buildUi()
 {
@@ -76,6 +82,7 @@ void QSerialMonitor::buildUi()
     m_commandEdit = new QLineEdit(sendBox);
     m_commandEdit->setPlaceholderText(QStringLiteral("例如：START 或 SET:100"));
     m_sendButton = new QPushButton(QStringLiteral("发送"), sendBox);
+    m_sendButton->setEnabled(false);
 
     sendLayout->addWidget(m_commandEdit);
     sendLayout->addWidget(m_sendButton);
@@ -111,7 +118,27 @@ void QSerialMonitor::buildUi()
 
     connect(m_refreshButton, &QPushButton::clicked, this, &QSerialMonitor::refreshPorts);
     connect(m_openButton, &QPushButton::clicked, this, &QSerialMonitor::openOrClosePort);
+    connect(m_sendButton, &QPushButton::clicked, this, &QSerialMonitor::sendCommand);
+    connect(m_commandEdit, &QLineEdit::returnPressed, this, &QSerialMonitor::sendCommand);
+}
 
+void QSerialMonitor::setupWorker()
+{
+    m_worker = new SerialWorker;
+    m_worker->moveToThread(&m_workerThread);
+
+    connect(&m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
+    connect(this, &QSerialMonitor::requestOpenPort, m_worker, &SerialWorker::openPort);
+    connect(this, &QSerialMonitor::requestClosePort, m_worker, &SerialWorker::closePort);
+    connect(this, &QSerialMonitor::requestWriteText, m_worker, &SerialWorker::writeText);
+
+    connect(m_worker, &SerialWorker::portOpened, this, &QSerialMonitor::onPortOpened);
+    connect(m_worker, &SerialWorker::portClosed, this, &QSerialMonitor::onPortClosed);
+    connect(m_worker, &SerialWorker::rawReceived, this, &QSerialMonitor::onRawReceived);
+    connect(m_worker, &SerialWorker::lineReceived, this, &QSerialMonitor::onLineReceived);
+    connect(m_worker, &SerialWorker::errorOccurred, this, &QSerialMonitor::onErrorOccurred);
+
+    m_workerThread.start();
 }
 
 void QSerialMonitor::refreshPorts()
@@ -135,7 +162,7 @@ void QSerialMonitor::refreshPorts()
 
 void QSerialMonitor::openOrClosePort()
 {
-    if (m_isOpened)
+    if (m_opened)
     {
         emit requestClosePort();
         return;
@@ -155,12 +182,80 @@ void QSerialMonitor::openOrClosePort()
         );
 }
 
+void QSerialMonitor::sendCommand()
+{
+    const QString command = m_commandEdit->text().trimmed();
+    if (command.isEmpty()) {
+        return;
+    }
+
+    emit requestWriteText(command);
+    appendLog(QStringLiteral("[TX] %1").arg(command));
+    m_commandEdit->clear();
+}
+
+void QSerialMonitor::onPortOpened()
+{
+    m_opened = true;
+    m_openButton->setText(QStringLiteral("关闭串口"));
+    m_sendButton->setEnabled(true);
+    m_statusLabel->setText(QStringLiteral("已连接"));
+    m_lineCount = 0;
+    m_countLabel->setText(QStringLiteral("0"));
+    m_lastValueLabel->setText(QStringLiteral("--"));
+    appendLog(QStringLiteral("串口已打开"));
+}
+
+void QSerialMonitor::onPortClosed()
+{
+    m_opened = false;
+    m_openButton->setText(QStringLiteral("打开串口"));
+    m_sendButton->setEnabled(false);
+    m_statusLabel->setText(QStringLiteral("未连接"));
+    appendLog(QStringLiteral("串口已关闭"));
+}
+
+void QSerialMonitor::onRawReceived(const QByteArray& data)
+{
+    appendLog(QStringLiteral("[RX RAW] %1").arg(QString::fromUtf8(data).trimmed()));
+}
+
+void QSerialMonitor::onLineReceived(const QString& line)
+{
+    ++m_lineCount;
+    m_countLabel->setText(QString::number(m_lineCount));
+    appendLog(QStringLiteral("[RX LINE] %1").arg(line));
+
+    double value = 0.0;
+    if (parseValue(line, &value)) {
+        m_lastValueLabel->setText(QString::number(value, 'f', 2));
+    }
+}
+
+void QSerialMonitor::onErrorOccurred(const QString& message)
+{
+    appendLog(QStringLiteral("[ERROR] %1").arg(message));
+}
+
 void QSerialMonitor::appendLog(const QString& message)
 {
     const QString time = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"));
     m_logEdit->append(QStringLiteral("%1，%2").arg(time, message));
 }
 
+bool QSerialMonitor::parseValue(const QString& line, double* value) const
+{
+    const int splitIndex = line.indexOf(':');
+    const QString numberText = splitIndex >= 0 ? line.mid(splitIndex + 1).trimmed() : line.trimmed();
+
+    bool ok = false;
+    const double parsed = numberText.toDouble(&ok);
+    if (ok && value != nullptr) {
+        *value = parsed;
+    }
+
+    return ok;
+}
 
 ChartWidget::ChartWidget(QWidget* parent)
     : QWidget(parent)
