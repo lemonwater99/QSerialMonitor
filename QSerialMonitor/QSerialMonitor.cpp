@@ -201,6 +201,7 @@ void QSerialMonitor::onPortOpened()
     m_sendButton->setEnabled(true);
     m_statusLabel->setText(QStringLiteral("已连接"));
     m_lineCount = 0;
+    m_chart->clear();
     m_countLabel->setText(QStringLiteral("0"));
     m_lastValueLabel->setText(QStringLiteral("--"));
     appendLog(QStringLiteral("串口已打开"));
@@ -229,6 +230,7 @@ void QSerialMonitor::onLineReceived(const QString& line)
     double value = 0.0;
     if (parseValue(line, &value)) {
         m_lastValueLabel->setText(QString::number(value, 'f', 2));
+        m_chart->addPoint(value);
     }
 }
 
@@ -264,7 +266,85 @@ ChartWidget::ChartWidget(QWidget* parent)
     setAutoFillBackground(true);
 }
 
+void ChartWidget::addPoint(double value)
+{
+	m_points.append(value);
+	if (m_points.size() > m_maxPoints) 
+    {
+		m_points.removeFirst();
+	}
+	update();
+}
+
+void ChartWidget::clear()
+{
+    m_points.clear();
+    update();
+}
+
 void ChartWidget::paintEvent(QPaintEvent* event)
 {
+	Q_UNUSED(event);
 
+    QPainter painter(this);
+	painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.fillRect(rect(), QColor(248, 250, 252));
+
+	const QRect plot = rect().adjusted(48, 24, -24, -42);
+	painter.setPen(QPen(QColor(203, 213, 225),1));
+    painter.drawRect(plot);
+
+	// 绘制水平网格线，分为5等份
+    for (int i = 0; i < 5; ++i)
+    {
+		const int y = plot.top() + i * plot.height() / 5;
+		painter.drawLine(plot.left(), y, plot.right(), y);
+    }
+
+    // 在控件上方绘制标题
+	painter.setPen(QPen(QColor(71, 85, 105), 1));
+    painter.drawText(14,22, QStringLiteral("实时曲线"));
+
+    if (m_points.isEmpty())
+    {
+        painter.setPen(QColor(100, 116, 139));
+		painter.drawText(plot, Qt::AlignCenter, QStringLiteral("暂无数据"));
+        return;
+    }
+
+    // 计算数据中的最小和最大值；若相等（qFuzzyCompare），将它们扩展 ±1，避免除以 0 和显示平直线。
+    const auto [minIt, maxIt] = std::minmax_element(m_points.begin(), m_points.end());
+	double minValue = *minIt;
+	double maxValue = *maxIt;
+    if (qFuzzyCompare(minValue, maxValue))
+    {
+		minValue -= 1.0;
+		maxValue += 1.0;
+    }
+
+    // 将 m_points 的每个样本按在绘图区内的 x,y 比例映射为 QPointF，构建曲线路径。xRatio 根据索引均匀分布，yRatio 根据 min/max 归一化
+	QPainterPath path;
+    for (int i = 0; i < m_points.size(); ++i)
+    {
+		const double xRatio = static_cast<double>(i) / (m_points.size() - 1);
+		const double yRatio = (m_points[i] - minValue) / (maxValue - minValue);
+        const QPointF point(plot.left() + xRatio * plot.width(),
+            plot.bottom() - yRatio * plot.height());
+		if (i == 0)
+		{
+			path.moveTo(point);
+		}
+		else
+		{
+			path.lineTo(point);
+		}
+    }
+
+    painter.setPen(QPen(QColor(37, 99, 235), 2.5));
+    painter.drawPath(path);
+
+    // 在左侧绘制最大/最小数值标签，并在底部显示当前采样点数量
+    painter.drawText(8, plot.top() + 12, QString::number(maxValue, 'f', 1));
+    painter.drawText(8, plot.bottom(), QString::number(minValue, 'f', 1));
+    painter.drawText(plot.left(), height() - 16, QStringLiteral("采样点：%1").arg(m_points.size()));
 }
